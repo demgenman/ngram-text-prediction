@@ -1,0 +1,790 @@
+---
+title: "Text Prediction Using N-Grams"
+author: "Alexander Vlasblom"
+date: "July 2015"
+output:
+  html_document:
+    css: custom.css
+    theme: cerulean
+    toc: yes
+subtitle: Coursera Data Science Capstone Milestone Report
+---
+
+```{r global_options, include=FALSE}
+library(knitr)
+rm(list=ls())
+opts_knit$set(root.dir=normalizePath('~/Coursera - Data Science/10 Capstone project/ngram-text-prediction/'))
+knitr::opts_chunk$set(fig.width=8, fig.height=8, fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+options(width = 240)
+outputType <- "html"
+gc()
+# to regenerate the document from scratch, first delete all cached chunk outputs in folder ./cache 
+```
+
+# Introduction
+
+Mobile devices have become indispensible everyday companions at home and work, to socialize, play and do business. But lacking a full-size keyboard, text entry on touch screen devices in particular can be cumbersome. Automated text prediction aims to solve this by using entered text to predict the next word.
+
+This report does an exploratory analysis of a large body of text to design a text prediction system that could be run efficiently on a mobile device.
+
+The analysis uses R, RStudio and the R package tm for text mining. This report is written in R Markdown. The analysis code is part of the [report source](hhttps://github.com/demgenman/ngram-text-prediction/blob/master/docs/milestone_report.Rmd).
+
+# Understanding the problem
+
+Natural Language Processing (NLP) is the field of computational linguistics that is concerned with the interactions between computers and humans (Wikipedia https://en.wikipedia.org/wiki/Natural_language_processing). It provides approaches and tools that may be used in a range of language processing tasks among which are identifying structure and meaning of texts, and -- the focus of this report -- generating natural language. 
+
+Natural Language Processing involves a number of activities (ref Mining the Social Web, Second Edition, by Matthew A. Russell).
+
+1. End of sentence detection. Text is broken up in a collection of meaningful sentences.
+
+2. Tokenization. Individual sentences are split into tokens, typically words and delineators such as start-of-sentence and end-of-sentence.
+
+3. Part-of-speech tagging. Tokens are assigned part-of-speech information: noun, verb, etc.
+
+4. Chunking. Deriving logical concepts from the tagged tokens within a sentence.
+
+5. Extraction. Named entities (people, locations, events, etc) are extracted from each chunk.
+
+These steps should not be applied rigidly however. Some steps may be less relevant to achive the desired NLP objective. The derivation of meaning or concepts is not prerequisite to construct a predictive text model. 
+
+It may be expected that the accuracy of a predictive text model primarily depends on the number of unique words that are available in the original body of text. Complementary data sources may include dictionaries of profanity words (assuming that the prediction of such words is to be avoided), stop words, named entities (sports, cities, states, presidents), synonyms (WordNet database) and jargon dictionaries.
+
+Common issues in the analysis of text data are the use of colloquial language and punctuation as well as occurrences of misspellings (bye vs by). Especially on social media people often use non-words and acronyms (lol) that are a language on their own.
+
+# Data acquisition and cleaning
+
+Predictive text modeling using NLP follows generally the same approach to data as we learned in the Data Science Specialization. The data is obtained, cleaned and explored, before moving to the predictive modeling stage using a training, validation and test set, and finally text prediction itself.  
+
+The source data in the project at hand consists of a set of files taken from the set of corpora provided by HC Corpora (http://www.corpora.heliohost.org). The readme file at http://www.corpora.heliohost.org/aboutcorpus.html provides details on the available corpora. Besides text the files include meta data for Main Website, Date, Entry Type and Subject.
+
+The Coursera dataset analyzed for this report is downloaded from https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip. The dataset files contain text but they lack the additional meta data mentioned above. Although the files in the dataset have been filtered for language they may still contain some foreign language words. 
+
+```{r}
+library(plyr)
+library(xtable)
+```
+
+```{r, cache=TRUE}
+dirData <- "./data/final/en_US"
+filesFinal <- c("en_US.blogs.txt", "en_US.news.txt", "en_US.twitter.txt")
+
+# read texts
+datasets <- lapply(sprintf("%s/%s", dirData, filesFinal), function(p) {
+    message(p)
+    system(paste("wc -l", p))
+    list(path=p, content=readLines(p))
+})
+```
+
+### Dataset summary
+
+The analysis is performed on the files containing American English texts. The table below gives an overview of file size, line and word counts.
+
+```{r, results='asis', cache=TRUE}
+# stats
+# news.txt line count difers: wc-l gives higher line count than readLines
+datasets.stats <- ldply(datasets, function(ds) {
+    wc.l <- as.integer(sub(" .*$", "", system(paste("wc -l", ds$path), intern=TRUE)))
+    wc.w <- as.integer(sub(" .*$", "", system(paste("wc -w", ds$path), intern=TRUE)))
+    data.frame(path=ds$path, file.size=round(file.info(ds$path)[, "size"]/(2^20), 1), 
+               obj.size=round(object.size(ds$content)[1]/(2^20), 1)
+#                , nr.lines=length(ds$content), 
+               , wc.l=wc.l
+               , max.length=max(nchar(ds$content))
+               , wc.w=wc.w
+#                , line.freq.love=sum(grepl("love", ds$content)) 
+#                , line.freq.hate=sum(grepl("hate", ds$content))
+    )
+})
+datasets.stats2 <- datasets.stats
+colnames(datasets.stats2) <- c("File", "File Size (MB)", "Object Size (MB)", "Lines", "Max length", "Words")
+print(xtable(datasets.stats2), type="html", include.rownames=FALSE)
+cat("<br/>")
+```
+
+All files are quite large (File Size) and appear to require significant memory (Object Size). As this is before any processing it may be necessary to sample the files rather than use the entire file to avoid hitting memory and processing constraints.
+
+Whereas the number of lines varies (Lines), the number of words is approximately the same for each file (Words). Taking equal samples of each file would ensure that the word frequency distribution of the combined corpus is not skewed.
+
+### File content
+
+A few sample lines from each file are shown below.
+
+```{r}
+# What do the data look like?
+# show a few randomly picked lines
+set.seed(9876)
+# for (ds in datasets) {
+#     print(ds[[1]])
+#     print(xtable(sample(ds[[2]], 5)))
+# }
+# rm(ds)
+```
+
+**`r datasets[[1]]$path`**
+
+```{r, results='asis'}
+cat("<div style='margin-left:20px; background-color:#eeeeee;'>")
+print(sample(datasets[[1]]$content, 5))
+cat("</div><br/>")
+```
+
+**`r datasets[[2]]$path`**
+
+```{r, results='asis'}
+cat("<div style='margin-left:20px; background-color:#eeeeee;'>")
+print(sample(datasets[[2]]$content, 5))
+cat("</div><br/>")
+```
+
+**`r datasets[[3]]$path`**
+
+```{r, results='asis'}
+cat("<div style='margin-left:20px; background-color:#eeeeee;'>")
+print(sample(datasets[[3]]$content, 5))
+cat("</div><br/>")
+```
+
+All files contain lines that consist of multiple sentences. The character sets may include accented letters as used in non-English languages. Sentences may include punctuation such as single or double quotes surrounding words, and words may contain contractions ("don't"" as a shorthand for "do not"). End of sentence punctuations may appear mid-sentence, as seen in the News and Blogs files. Cleaning the body of texts is therefore necessary.
+
+### Tokenization and filtering
+
+Tokenization is the process of cutting the text into pieces: from body of text into sentences and words. We will remove punctuation characters such as commas, parentheses and the like, under the assumption that they have little impact on word order and n-gram composition. Numeric characters that may appear in numbers and dates are also removed. The combination of certain numbers and words can have predictive value, but their frequency might be too low to be useful.
+
+Before building the word frequency tables (explained in the next section) all text is converted to lowercase. As a consequence the prediction model will predict lowercase words only. For English text this is less of an issue than for a language like German that uses capitalized nouns. In such case an additional tokenization step is needed that categorizes word classes (noun, verb, etc), allowing the character case to be reset selectively.
+
+Initially we will not treat typos, garbage words and wrong language any differently from "proper" words, under the assumption that they represent a minor portion of the text. Profanity words will be removed. For this we use the lists of terms that could be found offensive that are available from http://www.bannedwordlist.com/lists/swearWords.txt (around 75 terms) and http://www.cs.cmu.edu/~biglou/resources/bad-words.txt (1,300 terms).
+
+The planned model will use word sequences of up to four words to predict the next word. 
+
+# Exploratory analysis
+
+```{r}
+# Alexander Vlasblom
+# Explore and analyze data (functions)
+# 2015-07-16
+
+library(tm)
+library(RCurl)
+library(XML)
+library(RWeka)
+library(plyr)
+library(qdap)
+library(ggplot2)
+library(reshape2)
+library(scales)
+library(gridExtra)
+
+# global settings
+dirData <- "./data/final/en_US"
+filesFinal <- c("en_US.blogs.txt", "en_US.news.txt", "en_US.twitter.txt")
+scenarioRange <- c(0.01, 0.05, 0.1)
+mydebug <- FALSE
+
+# debug print functions
+dmessage <- function(...) if (mydebug) message(...)
+dprint <- function(...) if (mydebug) print(...)
+
+# read datasets
+# returns list of dataset name and content converted to ascii
+read.datasets <- function(dirData, filesFinal) {
+    dmessage("read.datasets")
+    lapply(sprintf("%s/%s", dirData, filesFinal), function(p) {
+        dmessage(p)
+        system(paste("wc -l", p))
+        list(path=p, content=iconv(readLines(p), "UTF-8", "ASCII"))
+    })
+}
+
+# build corpus
+# returns corpus
+makeCorpus <- function(corpustexts) {
+    # docs.corpus <- Corpus(DirSource(dirData, pattern="\\.txt$"), readerControl=list(reader=readPlain, language="lat"))
+    
+    corpustexts <- sent_detect(corpustexts)
+    docs.corpus <- Corpus(VectorSource(corpustexts))
+    
+    # cleanup text
+    docs.corpus <- tm_map(docs.corpus, stripWhitespace)
+    docs.corpus <- tm_map(docs.corpus, removePunctuation)
+    docs.corpus <- tm_map(docs.corpus, removeNumbers)
+    docs.corpus <- tm_map(docs.corpus, tolower)
+    
+    # remove profanity words
+    pWordLists <- list("http://www.bannedwordlist.com/lists/swearWords.txt", 
+                       "http://www.cs.cmu.edu/~biglou/resources/bad-words.txt")
+    profanityWords <- ldply(pWordLists, function(pwl.url) {
+        pwl.file <- paste0("./data/", gsub("^.*/", "", pwl.url))
+        if (!file.exists(pwl.file)) download.file(pwl.url, pwl.file)
+        data.frame(word=readLines(pwl.file))
+    })
+    profanityWords <- profanityWords[!duplicated(profanityWords),]
+    
+    docs.corpus <- tm_map(docs.corpus, removeWords, profanityWords)    
+}
+
+# build document term matrix
+# returns document term matrix
+makeDtm <- function(docs.corpus, ngram, ...) {
+    if (ngram == 1)
+        dtm <- DocumentTermMatrix(docs.corpus, ...)
+    else {
+        ngramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = ngram, max = ngram))
+        dtm <- DocumentTermMatrix(docs.corpus, control=list(tokenize=ngramTokenizer))        
+    }
+    dtm
+}
+
+# frequency sorted document term matrix
+# returns data frame of ngram and freq
+freqDtm <- function(dtm) {
+    freq <- data.frame(freq=sort(colSums(as.matrix(dtm)), decreasing=T))
+    freq$ngram <- rownames(freq); rownames(freq) <- NULL
+    freq[,c(2,1)]
+    # A weird thing happens: somehow the term "deletemeqdap" gets introduced. Since it is not anywhere in the
+    # source data, hard-remove it here, before any other processing is done yet
+    dmessage("deletemeqdap: ", nrow(freq[grepl("deletemeqdap", freq$ngram),]))
+    freq <- freq[!grepl("deletemeqdap", freq$ngram),]
+}
+
+# extract n-grams from a training dataset for all n in range 1:4
+# returns list of n-grams
+makeNgrams <- function(alltext.train) {
+    # Process text in chunks to avoid memory allocation limits
+    # Note: this can take a few minutes, depending on nr of links of data in the Corpus
+    chunkSize <- 1000
+    ngramRange <- 1:4
+    
+    dmessage("Lines of data: ", length(alltext.train))
+    dmessage("Chunk size: ", chunkSize)
+    dmessage("Ngram range: ", paste(ngramRange, collapse=" "))
+    
+    ngramChunks <- lapply(0:as.integer(length(alltext.train) / chunkSize), function(chunk) {
+        cat(sprintf("%d ", chunk))
+        alltext.chunk <- alltext.train[(chunk * chunkSize + 1):min(length(alltext.train), (chunk + 1) * chunkSize)]
+        # get n-grams
+        docs.corpus <- makeCorpus(alltext.chunk)
+        freq <- lapply(ngramRange, 
+                       function(n) freqDtm(makeDtm(docs.corpus, n, control = list(stopwords=stopwords(kind="en")))))
+        freq
+    })
+    
+    # combine ngram frequency counts
+    # method 1) ngrams <- lapply(ngramRange, function(ngram.nr) --> memory intensive, fails to complete at n=3
+    #   for a sample size of 20%
+    # method 2) for loop
+    #   for (ngram.nr in 1:4) { compute ngram; save to ngram file}
+    #   ngrams <- lapply(ngramRange, function(ngram.nr) { load(ngram file) }
+    
+    mergeMethod <- 2
+    if (mergeMethod == 1) {
+        ngrams <- lapply(ngramRange, function(ngram.nr) {
+            # this is a memory-critical step
+            # method a) do.call("rbind.fill", list of df)
+            # method b) do.call("rbind", list of df) - should be fine, because colnames are all identical
+            # method c) see http://stackoverflow.com/questions/7093984/memory-efficient-alternative-to-rbind-in-place-rbind
+            #         nextrow = nrow(df)+1
+            #         df[nextrow:(nextrow+nrow(df.extension)-1),] = df.extension
+            #         # we need to assure unique row names
+            #         row.names(df) = 1:nrow(df)
+            dmessage("Merge dtm chunks started: ", Sys.time())
+            ngram.freq <- do.call("rbind", lapply(1:length(ngramChunks), function(chunknr) {
+                ngramChunks[[chunknr]][[ngram.nr]]
+            }))
+            dmessage("Dtm chunks merged: ", Sys.time())
+            dmessage("Summarize freq")
+            ngram.freq <- ddply(ngram.freq, .(ngram), summarize, total.freq=sum(freq)
+#                                 , .progress="text"
+                                )
+            colnames(ngram.freq)[which(colnames(ngram.freq) == "total.freq")] <- "freq"
+            ngram.freq <- ngram.freq[order(-ngram.freq$freq),]
+            save(ngram.freq, file=sprintf("./data/ngram.freq %d.RData", ngram.nr))
+        })
+    } else {
+        ngramTempFile <- "./data/ngram.freq %d.RData"
+        for (ngram.nr in ngramRange) {
+            dmessage("Merge dtm chunks started: ", Sys.time())
+            ngram.freq <- do.call("rbind", lapply(1:length(ngramChunks), function(chunknr) {
+                ngramChunks[[chunknr]][[ngram.nr]]
+            }))
+            dmessage("Dtm chunks merged: ", Sys.time())
+            dmessage("Summarize freq")
+            ngram.freq <- ddply(ngram.freq, .(ngram), summarize, total.freq=sum(freq)
+#                                 , .progress="text"
+                                )
+            colnames(ngram.freq)[which(colnames(ngram.freq) == "total.freq")] <- "freq"
+            ngram.freq <- ngram.freq[order(-ngram.freq$freq),]
+
+            # A weird thing happens: somehow the term "deletemeqdap" gets introduced. Since it is not anywhere in the
+            # source data, hard-remove it here, before any other processing is done yet
+            dmessage("deletemeqdap: ", nrow(ngram.freq[grepl("deletemeqdap", ngram.freq$ngram),]))
+            ngram.freq <- ngram.freq[!grepl("deletemeqdap", ngram.freq$ngram),]
+
+            pathNgramTempFile <- sprintf(ngramTempFile, ngram.nr)
+            dmessage("Save temp: ", Sys.time(), " ", pathNgramTempFile)
+            save(ngram.freq, file=pathNgramTempFile) 
+            rm(ngram.freq);gc()
+        }
+        ngrams <- lapply(ngramRange, function(ngram.nr) {
+            pathNgramTempFile <- sprintf(ngramTempFile, ngram.nr)
+            dmessage("Load temp: ", Sys.time(), " ", pathNgramTempFile)
+            load(file = pathNgramTempFile)
+            dprint(dim(ngram.freq))
+            ngram.freq
+        })
+    }
+    
+    # the result has N list elements:
+    # [[1]] = 1-gram, [[2]] = 2-gram, [[3]] = 3-gram, ... [[n]] = n-gram
+
+    ngrams
+}
+
+# build training scenario from dataset sample with specific sample size
+# returns n-grams in training scenario
+makeScenario <- function(trainSample) {
+    dmessage("makeScenario training sample as % of total data: ", trainSample)
+
+    datasets <- read.datasets(dirData, filesFinal)
+    
+    set.seed(2345)
+    inTrain <- lapply(datasets, function(ds) {
+        sample(1:length(ds[[2]]), length(ds[[2]]) * trainSample)
+    })
+    
+    # Build corpus of training set
+    alltext.train <- unlist(mapply(datasets, inTrain, FUN = function(ds, train) {
+        # use [train] to select training set, use [-train] to select test set
+        ds[[2]][train]
+    }))
+    
+    alltext.test <- unlist(mapply(datasets, inTrain, FUN = function(ds, train) {
+        # use [train] to select training set, use [-train] to select test set
+        ds[[2]][-train]
+    }))
+    pathTest <- sprintf("./data/alltext.test %.2f.RData", trainSample * 100)
+    dmessage("Save test dataset: ", pathTest)
+    save(alltext.test, file=pathTest)
+
+    # unload unused variables from memory
+    rm(datasets); gc()
+    
+    ngrams <- makeNgrams(alltext.train)
+
+    # Calculation of maximum likelihood for last word = count(n-gram) / count(x-gram)
+    # Step 1 - split ngram in xgram + last word
+    for (n in 1:length(ngrams)) {
+        df <- ngrams[[n]]
+        if (n == 1) {
+            df$predict <- df$ngram
+        } else {
+            xgram.pattern <- paste0("^(\\w+( +\\w+){", n-2, "}) +\\w+ *$")
+            df$xgram <- sub(xgram.pattern, "\\1", df$ngram)
+            predict.pattern <- "^.* +(\\w+) *$"
+            df$predict <- sub(predict.pattern, "\\1", df$ngram)        
+        }
+        ngrams[[n]] <- df
+    }    
+    # Step 2 - calculate ML
+    for (n in 1:length(ngrams)) {
+        if (class(ngrams[[n]]) == "data.frame") {
+            df <- ngrams[[n]]
+            if (n == 1) {
+                df[,"ml"] <- df$freq / sum(df$freq)
+            } else {
+                dfx <- ngrams[[n-1]]
+                df <- merge(df, dfx[,c("ngram", "freq")], by.x="xgram", by.y="ngram", all.x=TRUE, all.y=FALSE)
+                colnames(df) [which(colnames(df) == "freq.x")] <- "freq"
+                df[,"ml"] <- df$freq / df$freq.y
+                df <- df[order(-df$freq, -df$ml),] 
+            }
+            ngrams[[n]] <- df
+        }
+    }    
+    
+    # [[n+1]] = training set selection info (selected line numbers for training set)
+    ngrams$selection = inTrain
+    # [[n+2]] = training scenario reference
+    ngrams$scenario <- sprintf("Train %.2f", trainSample)
+    
+    ngrams
+}
+
+# load training scenario
+# returns n-grams in training scenario
+loadScenarios <- function(trainSample) {
+    dmessage("loadScenarios: ", trainSample)
+    pathNgrams <- sprintf("./data/ngrams %.2f.RData", trainSample * 100)
+    if (!file.exists(pathNgrams)) {
+        dmessage("Generate ngrams: ", pathNgrams)
+        ngrams <- makeScenario(trainSample)
+        dmessage("Save ngrams: ", pathNgrams)
+        save(ngrams, file=pathNgrams)
+    }    
+    else {
+        dmessage("Load ngrams: ", pathNgrams)
+        load(pathNgrams)
+    }
+    ngrams
+}
+
+# compute scenario statistics
+# returns a data frame containing, for each scenario, per n, the nr of unique n-grams in the scenario, and the nr of n-gram instances.
+stats.scenarios <- function(training.scenarios) {
+    # print stats for training dataset scenarios 
+    ngramRange <- 1:4
+    scenario.stats <- ldply(training.scenarios, function(ngrams) {
+        cbind(scenario = ngrams$scenario, ldply(ngramRange, function(n) {
+            cbind(ngram = n, data.frame(unique.ngrams = nrow(ngrams[[n]]),
+                                        total.instances = sum(ngrams[[n]][,"freq"]),
+                                        ratio = round(sum(ngrams[[n]][,"freq"]) / nrow(ngrams[[n]]), 1)))
+        }))
+    })
+    scenario.stats <- scenario.stats[order(scenario.stats$scenario, scenario.stats$ngram),]
+    dprint(scenario.stats)
+    scenario.stats
+}
+
+# compute language coverage statistics
+# returns data frame containing, for each training scenario, per n, the nr of unique n-grams to achieve a given percentage of coverage.
+stats.wordcoverage <- function(training.scenarios) {
+    ngramRange <- 1:4
+    coverageRange <- c(0.5, 0.6, 0.7, 0.8, 0.85, 0.875, 0.9)
+    # word coverage stats
+    word.coverage <- ldply(ngramRange, function(n) {
+        ldply(coverageRange, function(coverage) {
+            data.frame(ngram=n, coverage=coverage, t(unlist(lapply(training.scenarios, function(ngrams) {
+                freq <- ngrams[[n]][,"freq"]
+                totalWords <- sum(freq)
+                cumulWords <- cumsum(freq)
+                words <- sum(cumulWords <= coverage * totalWords)
+                words
+            }))))        
+        })
+    })
+    colnames(word.coverage)[-(1:2)] <- make.names(paste("Train", scenarioRange))
+    dprint(word.coverage)
+    word.coverage
+}
+```
+
+Every language has certain word sequences that occur often. In the field of computational linguistics they are know as n-grams. An n-gram is a contiguous sequence of n items from a given sequence of text or speech (Wikipedia, https://en.wikipedia.org/wiki/N-gram). Text prediction systems use n-grams to predict the next word based on the probability of its occurrence in the language's n-grams. 
+
+In Natural Language Processing the ratio of unique words (or n-grams) and total number of occurrences of these words (or n-grams) is known as language coverage. If more words are included the language coverage is expected to increase. Words that occur often have a higher impact on coverage than words that occur rarely.
+
+To determine how many unique words and n-grams are required for a certain percentage of coverage several scenarios are analyzed. The scenario parameter analyzed for its impact on coverage is dataset sample size, which we set to vary between 1%, 5% and 10% of the original dataset size. 
+
+### N-grams and frequency
+
+The three sample size scenarios are analyzed for n-grams with n between 1 and 4.
+
+```{r, cache=TRUE}
+message("Training scenario creation started: ", Sys.time())
+
+mydebug <- FALSE
+
+# create training scenarios with ngrams
+training.scenarios <- lapply(scenarioRange, loadScenarios)
+```
+
+The table below shows the number of unique n-grams in each training scenario (unique.ngrams), the associated total number of n-gram occurrences (total.instances), and the ratio total to unique. A low ratio means a high number of n-grams that occur only once in the sample. From the perspective of prediction accuracy we would likely be looking to include as many n-grams as possible, whereas model efficiency drives us to drop the single n-gram ocurrences and include the n-grams that occur more than once. The ratio increase from one sample size to the next shows whether this helps to identify additional frequent n-grams. A stable or dropping ratio means that mostly new single occurrence n-grams were added.
+
+```{r results='asis'}
+print(xtable(stats.scenarios(training.scenarios), display = c("s", "s", "s", "d", "d", "f")), type="html", include.rownames=FALSE)
+cat("<br/>")
+```
+
+
+```{r}
+ts.nr <- 1 # 1 percent sample
+```
+
+The charts below show the top-12 most often occurring n-grams in the scenario `r training.scenarios[[ts.nr]]$scenario` (sample size = `r 100 * as.numeric(sub("^.* ", "", training.scenarios[[ts.nr]]$scenario))` percent). There are many stop words among the single words. Bigrams and trigrams also contain a good proportion of stopword sequences. N-grams that include stopwords will be kept in the corpus as they can enlarge the model's predictive capability.
+
+```{r, fig.width=8, fig.height=10}
+par(mfrow=c(2,2))
+for (n in 1:4) {
+    ng <- training.scenarios[[ts.nr]][[n]][1:12, c("ngram", "freq")]
+    ng$ngram <- factor(ng$ngram, levels=ng$ngram)
+    chart.title <- paste0("Top ", n, "-grams in dataset ", training.scenarios[[ts.nr]]$scenario)
+    bp <- barplot(ng$freq, main=chart.title)
+    # position label at 5% of max vertical height inside the bar 
+    text(bp, max(ng$freq) * 0.05, labels=ng$ngram, cex=1.2, srt=90, adj=c(0,0.5))
+}
+par(mfrow=c(1,1))
+```
+
+### Language coverage
+
+The charts below shows coverage (as a percentage of the scenario dataset size) against the number of unique n-grams in the sample, for each of the three sample scenarios. On the x-axis n-grams are sorted in descending order of occurrence.
+
+As expected the high frequency n-grams have a large impact on coverage, and the coverage ratio increases exponentially. As soon as the x-axis reaches the single occurrence n-grams the curve changes to linear. 
+
+For larger training sets it takes more words to reach a certain coverage, but this difference quickly disappears for the higher-order n-grams. For n=4 and higher the curves are mostly entirely linear from the start, which suggests that the increase of sample size has diminishing returns.
+
+```{r}
+word.coverage <- stats.wordcoverage(training.scenarios)
+word.coverage <- melt(word.coverage, id.vars = c("ngram", "coverage"))
+
+labels.num.big <- function(l) {
+    l <- format(l, big.mark=",", scientific = FALSE)
+    #     parse(text=l)
+}
+```
+
+
+```{r, fig.width=8, fig.height=10}
+# IMPORTANT CHART
+# 4 plots in grid
+ggplist <- lapply(1:4, function(n) {
+    dmessage("n: ", n)
+    ggp <- NULL
+    for (ts in training.scenarios) {
+        message("ts: ", ts$scenario)
+        word.freq <- ts[[n]]
+        word.freq$words <- 1:nrow(word.freq)
+        word.freq$coverage <- cumsum(word.freq$freq)/sum(word.freq$freq)
+        word.freq$scenario <- ts$scenario
+        # reduce nr of points to plot
+        nr.of.points <- 5000
+        word.freq <- word.freq[sort(sample(1:nrow(word.freq), nr.of.points)),]
+        # 1 base + 3 overlay plots
+        if (is.null(ggp)) {
+            ggp <- ggplot(word.freq, aes(x=words, y=coverage)) + geom_line() + scale_x_continuous(labels=labels.num.big) 
+            ggp <- ggp + labs(title=sprintf("%d-grams", n), x = sprintf("Unique %d-grams", n), y = "Language coverage") 
+            ggp <- ggp + geom_text(data = word.freq[nr.of.points,], aes(label = scenario, hjust = 0.6, vjust = 0.1))
+        }
+        else {
+            ggp <- ggp + geom_line(data = word.freq, aes(x=words, y=coverage)) 
+            ggp <- ggp + geom_text(data = word.freq[nr.of.points,], aes(label = scenario, hjust = 0.7, vjust = 0.1))
+        }
+    }
+    ggp
+})
+do.call("grid.arrange", c(ggplist, ncol=2))
+```
+
+The n-gram frequency distributions are long-tailed. The table below shows the split between single and multiple n-gram occurrences. In the 1 percent sample scenario there are some 12,000 unique words that appear multiple times and some 15,000 unique words that appear just once, or 55 percent. 81 percent of 2-grams appear just once. Increasing the sample size to 10 percent offers a marginal improvement, and only for the higher order n-grams. A minimal predictive model that includes all higher order n-grams that appear more than once would contain approximately 530,000 n-grams. 
+
+```{r, results='asis'}
+# IMPORTANT TABLE
+# nr of single occurrences
+stats.singles <- mdply(expand.grid(n=1:4, ts=1:length(training.scenarios)), function(n, ts) {
+    ngrams <- training.scenarios[[ts]][[n]]
+    data.frame(scenario = training.scenarios[[ts]]$scenario, ngram = n, unique.ngrams = nrow(ngrams), 
+               singles = nrow(ngrams[ngrams$freq == 1,]))
+})
+stats.singles <- mutate(stats.singles, singles.pct = as.integer(100 * (singles / unique.ngrams)), 
+                        multiples = unique.ngrams - singles)
+print(xtable(stats.singles[, c(3:5,8,6:7)]), type="html", include.rownames=FALSE)
+
+message("Finished: ", Sys.time())
+```
+
+# Modeling and prediction
+
+### Building the n-gram tables
+
+The basic n-gram model will take the n-grams of one to four words to predict the next word.
+
+The first task consists of generating the n-grams and frequencies from the sampled "training" dataset. 
+
+The larger the sample dataset, the more time and memory space it takes to generate the n-grams, especially for n > 2. Instead of processing the entire sample at once, the n-gram generation algorithm will process the files in pieces of 1,000 lines, build n-gram frequencies, and then combine the individual n-gram frequency tables into a single table, summarize and order the n-gram table by decreasing frequency. The process is repeated for each n. In this way a laptop with 8 GB of memory processes some 2,000 lines per minute, generating a 10 percent sample training set in about 3 hours. Unfortunately even this approach hits the memory limit when attempting to generate a larger 20 percent sample training set.
+
+The n-gram tables are then processed and split in (n-1)-grams and the final word, corresponding to the predictor and the predicted word, respectively. Next the n-gram conditional probabilities are computed using the formula for maximum likelihood: 
+$$
+Pr(w_{i}|w_{i-1}) = \frac {count(w_{i-1},w_{i})} {count(w_{i-1})}
+$$
+where $w_{i}$ is the last word, and $w_{i-1}$ the preceding words.
+
+The n-grams are stored in an R data frame, with character strings coded as factors. This should enable an easy and fast match by the prediction algorithm. 
+
+### Prediction
+
+The prediction algorithm takes the entered text, cleans and extracts the preceding 1 to n-1 words. It then uses a simple backoff approach in combination with weighting to build a list of probable next words.
+
+- For each n, select the top 6 matches based on n-gram frequency;
+- Combine the results;
+- Sort by maximum likelihood (high to low);
+- The top items form the prediction.
+
+### Accuracy
+
+```{r}
+# Prediction
+# This code would become part of the final app
+
+# Replace control and punctuation characters in an input text by space. Single quotes are removed.
+# Returns cleaned input text.
+cleanInput <- function(inputText) {
+    dmessage("cleanInput")
+    # remove single quotes, don't ==> dont
+    inputText <- gsub("'", "", tolower(inputText), fixed=TRUE)
+    # remove non-word charactters
+    charsToClean <- c("[:cntrl:]", "[:punct:]")
+    for (i in 1:length(charsToClean))
+        inputText <- gsub(paste0("[", charsToClean[i], "]"),  " ", inputText, fixed=FALSE)
+    inputText
+}
+
+# Break an input text in x-grams, i.e. the last n-1 words of the corresponding n-grams.
+# Returns list of x-grams.
+makeXgrams <- function(inputText, ngramRange=1:4) {
+    dmessage("makeXgrams")
+    inputText <- cleanInput(inputText)
+    xgramRange <- (ngramRange - 1)
+    xgramRange <- xgramRange[xgramRange > 0]
+    xgrams <- lapply(xgramRange, function(n) {
+        if (n > 0) {
+            # xgram regex matches 1 .. n-1 words
+            xgram <- regmatches(inputText, regexec(paste0("^.*\\b(", paste(rep("\\w+ +", n-1), collapse=""), "\\w+) *$"), inputText))
+            dmessage("xgram: ", xgram)
+            # drop first element, which contains the entire inputText, keeping only the n words part
+            xgram[[1]][-1]
+        }
+        else character(0)
+    })
+    xgrams
+}
+
+# Predict the next words for all x-grams in an input text, based on a given set of n-grams, n in range 1:4
+# Returns best candidates for the next word, as a data frame with columns predict (the predicted word) and total.freq (the observed
+# total nr of occurrences of the n-grams predicting the best candidates)
+predictN <- function(inputText, ngrams, ngramRange=1:4, order="freq", reorderThreshold=0) {
+    # inputText = predictor text
+    # ngrams = ordered list of ngrams, n-th item in list is data frame of n-grams (columns ngram and total.freq)
+
+    dmessage("predictN")
+
+    # Predict using longest ending ngram, if no match fall back to longest ngram minus 1, etc.
+    # If 2-gram fails, predict single word with highest probability in directionary.
+    
+    xgrams <- makeXgrams(inputText, ngramRange)
+    dprint(xgrams)
+    
+    # apply xgrams in reverse order (highest n first) to find potential candidates
+    candidates <- ldply(length(xgrams):1, function(x) {
+        # lookup x in n+1-grams
+        ng <- ngrams[[x+1]]
+        if (order=="ml") ng <- ng[order(-ng$ml),]
+        cands <- head(ng[ng$xgram == xgrams[[x]], c("predict", "freq", "ml")])
+        cands$n <- rep(x+1, nrow(cands))
+        cands
+    })
+
+    # if no candidates found using higher-level ngrams, use 1-gram
+    if (nrow(candidates) == 0) {
+        candidates <- head(ngrams[[1]])
+        candidates$n <- 1
+    }
+    # remove duplicates
+    # because of the data frame's descending order of frequency, 
+    # duplicated() will remove the lower frequency duplicated items
+    candidates[,"dup"] <- ifelse(duplicated(candidates$predict), TRUE, FALSE) 
+    
+    # reorder by global frequency
+    # if digits(max(total.freq)) for highest n-gram is within threshold digits(max(total.freq)) for lower order n-grams
+    freq.max <- sapply(2:3, function(n) max(candidates[candidates$n == n, "freq"]))
+    if (min(nchar(freq.max)) + reorderThreshold >= max(nchar(freq.max)))
+        candidates <- candidates[order(-candidates$freq),]
+    
+    dprint(str(candidates))
+    dprint(candidates)
+
+    candidates
+}
+```
+
+The lines of text in the dataset that were not included in the training set are used to test the model. The test selects lines  at random, and splits each sentence in n-grams. The next word prediction accuracy is tested on each (n-1)-gram. The predicted word is then compared wih word n. The accuracy is the ratio of correct predictions and total predictions.
+
+The test is done for the different training set sample sizes.
+
+The table below shows the validation result for ten and twenty lines sampled from the test set. 
+
+```{r results='asis'}
+makeTest <- function(sentence) {
+    dmessage("makeTest: ", sentence)
+    sentence <- cleanInput(sentence)
+    words <- unlist(strsplit(sentence, split = " +", fixed = FALSE))
+    dprint(str(words))
+
+    testXgram <- character(length(words)-1); testPredict <- words[2:length(words)]
+    for (w in 1:(length(words) - 1)) {
+        testXgram[w] <- ifelse(w == 1, words[w], paste(words[w-1], words[w]))
+    }
+    tests <- data.frame(nr=1:(length(words) - 1), xgram=testXgram, actual=testPredict)
+}
+
+makeTests <- function(alltext.test, nTests = 100) {
+    inTest <- sample(1:length(alltext.test), size = nTests)
+    tests <- ldply(inTest, function(i) {
+        cbind(i=i, makeTest(alltext.test[i]))
+    })
+}
+
+# split list of n-grams in predictor-tresponse tuples. List item n is a data frame of n-grams. 
+# The response is the final word in the n-gram, the predictor is formed
+# Returns the list of data frames with columns xgram (for n > 1) and predict, the predictor word(s) and response word.
+
+splitNgrams <- function(ng) {
+    dmessage("splitNgrams")
+    for (n in 1:length(ng)) {
+        if (class(ng[[n]]) == "data.frame") {
+            if (n == 1) {
+                colnames(ng[[n]])[which(colnames(ng[[n]]) == "ngram")] <- "predict"
+            }
+            else {
+                xgram.pattern <- paste0("^(\\w+( +\\w+){", n-2, "}) +\\w+ *$")
+                ng[[n]][,"xgram"] <- sub(xgram.pattern, "\\1", ng[[n]][,"ngram"])
+                predict.pattern <- "^.* +(\\w+) *$"
+                ng[[n]][,"predict"] <- sub(predict.pattern, "\\1", ng[[n]][,"ngram"])
+            }
+        }
+    }
+    dprint(str(ng))
+    ng
+}
+
+validate <- function(trainSample = 0.01, nTest = 10) {
+    message("validate: trainSample=", as.numeric(trainSample), ", nTest=", nTest)
+    # load training scenario
+    pathTest <- sprintf("./data/alltext.test %.2f.RData", trainSample * 100)
+    dmessage("load: ", pathTest)
+    load(pathTest)
+    # build tests
+    tests <- makeTests(alltext.test, nTest)
+    dprint(str(tests))
+    # initialize  prediction
+    # ngrams must be put in the global env for ddply to work inside the scope of this function definition
+    # see http://stackoverflow.com/questions/6955128/object-not-found-error-with-ddply-inside-a-function
+    tsngrams <<- loadScenarios(trainSample)
+    tsngrams <<- splitNgrams(tsngrams)
+    # perform tests
+    tests.validation <- ddply(tests, .(i, nr), summarize, xgram=xgram, actual=actual, predict=predictN(xgram, tsngrams)[1,1]
+#                               , .progress="text"
+                              )
+    dprint(tests.validation)
+    test.error <- sum(tests.validation$predict != tests.validation$actual, na.rm=TRUE) / nrow(tests.validation)
+    data.frame(trainSample=trainSample, lines=nTest, nr.tests=nrow(tests), test.error=test.error)
+}
+
+mydebug <- FALSE
+
+# Validation
+validation.result <- mdply(.data=expand.grid(nTest=c(10, 20),trainSample=c(0.01, 0.05, 0.1)), validate)
+print(xtable(validation.result[,-1], display = c("s", "f", "d", "d", "f"), digits=2), type="html", include.rownames=FALSE, )
+```
+
+
+The model accuracy varies between `r round((1-max(validation.result$test.error))*100,0)` percent and `r round((1-min(validation.result$test.error))*100,0)` percent. Varying the training set sample size between 1 and 10 percent does not seem to have a significant effect on prediction accuracy. It is to be investigated whether a larger sample size will increase accuracy.
+
+# Next steps
+
+To complete the project the following steps are projected:
+
+- Build a basic Shiny app that initializes itself by preloading a file of n-grams (n = 1 to 4) from the hosted Shiny app storage or alternatively external storage, such as github, assuming this is feasible. All n-gram file preparation will be done locally and prior to uploading the app to shinyapps.io, as described in section "Building the n-gram tables".
+- The app will preload a file that is optimized for use "at prediction time". The files will be .RData or in comma separated values format. Columns include the predictor (the (n-1)-grams), the predicted value (the last word of the n-gram, frequency, and the computed conditional probabilities (maximum likelihood). 
+- Test acceptable file sizes and impact on Shiny usage, as free Shiny accounts limit computing time. Preliminary testing shows that it is possible to loading an 11 MB .RData file (including 4 data frames of all n-grams, n = 1 to 4, sample size = 1 percent) in a Shiny app hosted on shinyapps.io. Loading a 45 MB .RData file (sample size = 5 percent) appears not possible and hangs the app.
+- Implement the current basic prediction model in the Shiny app.
+- Experiment to optimize the model to handle unseen n-grams, increasing model efficiency, and increasing accuracy overall.

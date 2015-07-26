@@ -1,0 +1,30 @@
+body {
+  padding-bottom:50px;
+}
+
+h1 {
+  font-size:18pt;
+}
+
+h1.title {
+  font-size:22pt;
+  font-weight:extra-bold;
+}
+
+h1.subtitle {
+  font-size:16pt;
+  margin-top:-10px;
+}
+
+h4 {
+  font-size:12pt; font-weight:normal;
+  color:#444444;
+}
+
+div[id=header] {
+  margin-bottom:50px;
+}
+
+div[id=TOC] {
+  margin-bottom:50px;
+}
