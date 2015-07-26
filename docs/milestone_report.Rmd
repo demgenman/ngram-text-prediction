@@ -28,7 +28,7 @@ Mobile devices have become indispensible everyday companions at home and work, t
 
 This report does an exploratory analysis of a large body of text to design a text prediction system that could be run efficiently on a mobile device.
 
-The analysis uses R, RStudio and the R package tm for text mining. This report is written in R Markdown. The analysis code is part of the [report source](hhttps://github.com/demgenman/ngram-text-prediction/blob/master/docs/milestone_report.Rmd).
+R, RStudio and the R package tm for text mining were used to perform the analysis. All analysis code is included in the [report R markdown document](https://github.com/demgenman/ngram-text-prediction/blob/master/docs/milestone_report.Rmd).
 
 # Understanding the problem
 
@@ -242,7 +242,7 @@ freqDtm <- function(dtm) {
     freq <- data.frame(freq=sort(colSums(as.matrix(dtm)), decreasing=T))
     freq$ngram <- rownames(freq); rownames(freq) <- NULL
     freq[,c(2,1)]
-    # A weird thing happens: somehow the term "deletemeqdap" gets introduced. Since it is not anywhere in the
+    # A weird thing happens: somehow the term "deletemeqdap" gets introduced. Maybe due to line 243? Since it is not anywhere in the
     # source data, hard-remove it here, before any other processing is done yet
     dmessage("deletemeqdap: ", nrow(freq[grepl("deletemeqdap", freq$ngram),]))
     freq <- freq[!grepl("deletemeqdap", freq$ngram),]
@@ -279,6 +279,7 @@ makeNgrams <- function(alltext.train) {
     
     mergeMethod <- 2
     if (mergeMethod == 1) {
+        # lapply version
         ngrams <- lapply(ngramRange, function(ngram.nr) {
             # this is a memory-critical step
             # method a) do.call("rbind.fill", list of df)
@@ -302,6 +303,7 @@ makeNgrams <- function(alltext.train) {
             save(ngram.freq, file=sprintf("./data/ngram.freq %d.RData", ngram.nr))
         })
     } else {
+        # method 2 uses for-loop; only ngrams for a specific n are kept in memory
         ngramTempFile <- "./data/ngram.freq %d.RData"
         for (ngram.nr in ngramRange) {
             dmessage("Merge dtm chunks started: ", Sys.time())
@@ -326,6 +328,7 @@ makeNgrams <- function(alltext.train) {
             save(ngram.freq, file=pathNgramTempFile) 
             rm(ngram.freq);gc()
         }
+        # combine into list object
         ngrams <- lapply(ngramRange, function(ngram.nr) {
             pathNgramTempFile <- sprintf(ngramTempFile, ngram.nr)
             dmessage("Load temp: ", Sys.time(), " ", pathNgramTempFile)
@@ -535,7 +538,6 @@ labels.num.big <- function(l) {
 
 
 ```{r, fig.width=8, fig.height=10}
-# IMPORTANT CHART
 # 4 plots in grid
 ggplist <- lapply(1:4, function(n) {
     dmessage("n: ", n)
@@ -568,7 +570,6 @@ do.call("grid.arrange", c(ggplist, ncol=2))
 The n-gram frequency distributions are long-tailed. The table below shows the split between single and multiple n-gram occurrences. In the 1 percent sample scenario there are some 12,000 unique words that appear multiple times and some 15,000 unique words that appear just once, or 55 percent. 81 percent of 2-grams appear just once. Increasing the sample size to 10 percent offers a marginal improvement, and only for the higher order n-grams. A minimal predictive model that includes all higher order n-grams that appear more than once would contain approximately 530,000 n-grams. 
 
 ```{r, results='asis'}
-# IMPORTANT TABLE
 # nr of single occurrences
 stats.singles <- mdply(expand.grid(n=1:4, ts=1:length(training.scenarios)), function(n, ts) {
     ngrams <- training.scenarios[[ts]][[n]]
