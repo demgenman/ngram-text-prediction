@@ -5,6 +5,7 @@ date: July-August 2015
 
 
 Data Science Specialization SwiftKey Capstone
+
 Coursera / Johns Hopkins University
 
 WordPred: Text Prediction Using N-grams
