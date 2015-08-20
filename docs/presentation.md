@@ -59,6 +59,6 @@ Future work and References
 ========================================================
 
 - Reduce startup time and memory usage: For a language model using a 5% corpus sample the current implementation ("list of data frames") needs 430 MB and 15 seconds startup time. A "data table"-based implementation needs much less memory, reducing startup time to 1-2 seconds. 
-- Increase prediction accuracy: To 20% or higher by smoothing approaches, noteably Kneser-Ney, and a larger sample from the language corpus (10-20% vs. 5% currently). A data table-based implementation ensures performance will not be negatively impacted.
+- Increase prediction accuracy: To 20% or higher by smoothing approaches, noteably Kneser-Ney, and a larger sample from the language corpus (10-20% vs. 5% currently).
 
 References: [Github repo](https://github.com/demgenman/ngram-text-prediction), [WordPred app](https://demgenman.shinyapps.io/shiny_ngram_app)

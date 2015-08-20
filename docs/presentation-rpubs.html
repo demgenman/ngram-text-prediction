@@ -843,7 +843,7 @@ where \( w_{i} \) is last word, \( w_{i-1} \) is n-1 preceding words.</li>
 <div class="slideContent" >
 <ul>
 <li>Reduce startup time and memory usage: For a language model using a 5% corpus sample the current implementation (&ldquo;list of data frames&rdquo;) needs 430 MB and 15 seconds startup time. A &ldquo;data table&rdquo;-based implementation needs much less memory, reducing startup time to 1-2 seconds. </li>
-<li>Increase prediction accuracy: To 20% or higher by smoothing approaches, noteably Kneser-Ney, and a larger sample from the language corpus (20% vs. 10% currently). A data table-based implementation ensures performance will not be negatively impacted.</li>
+<li>Increase prediction accuracy: To 20% or higher by smoothing approaches, noteably Kneser-Ney, and a larger sample from the language corpus (10-20% vs. 5% currently).</li>
 </ul>
 
 <p>References: <a href="https://github.com/demgenman/ngram-text-prediction">Github repo</a>, <a href="https://demgenman.shinyapps.io/shiny_ngram_app">WordPred app</a></p>
